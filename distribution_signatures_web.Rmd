@@ -1,0 +1,1143 @@
+---
+title: "Distribution Signatures"
+author: "Sven Halvorson"
+date: "5/7/2019"
+header:
+  teaser: /assets/images/dist_teaser.png
+excerpt: 'Quantiles and QQ plots visualized'
+output:
+  html_document:
+    toc: yes
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+
+library('tidyverse')
+library('kableExtra')
+library('audio')
+library('lubridate')
+library("gridExtra")
+
+
+ava = read.csv("C:/Users/HALVORS/Documents/DistributionSignatures/avocado.csv", stringsAsFactors = FALSE)
+
+ava = ava %>% 
+  mutate(ava_dt = ymd(Date)) %>% 
+  filter(year(ava_dt) %in% c(2017, 2016),
+         type == 'organic')
+  
+# Set some of the plotting parameters so we can play with them:
+n_quant = 19
+bead_size = 2.5
+stick_size = 0.9
+linewidth = 2
+
+```
+
+When I was in school I was taught that if you want to see if a data set is normally distributed, you can create a graph called a QQ plot. If the points on the scatter plot make a straight line, the data is normally distributed. I'm a bit embarrassed to say this but at that at the time, I only had a vague understanding of why this works and just accepted it as some dark sorcery. Much later, I came up with a different way of phrasing the concept that made it clear to me. My intention with this essay is to give a long winded explanation of this idea in a way most people, statistically literate or not, can understand.
+
+The motivating question is '**how can we get a feel for whether a data set resembles a theoretical distribution?**' 
+Many statistical techniques start with the phrase 'assume the data is normally distributed.' This 
+essay will give you a technique for assessing that assumption.
+We will explore questions about shapes of data and learn how QQ plots help in this dilemma.
+
+I've gotten my dirty mitts on the prices of avocados from 
+[this kaggle page](https://www.kaggle.com/neuromusic/avocado-prices). We'll see if the prices look roughly normal or whether they fit a different distribution better.
+
+You can see the code used to generate this document [here](https://github.com/svenhalvorson/DistributionSignatures).
+
+### Distributions
+
+In statistics, we often talk about a **population**  which is the set of all possible measurements and **samples** which are subsets of the population. For our example, we have a sample of organic avocado prices from 2016 & 2017 from the Haas corporation. The population we are sampling from could be the set of all avocado prices in the U.S. from 2016 to 2017.
+  
+We can use something called a **theoretical distribution** to describe
+the shape that a population takes mathematically. It's easy to think of these as curves. By using a distribution, we unlock a lot of fancy algebra that supports most of the statistical techniques you've heard of. 
+
+Here's an example of everyone's favorite theoretical distribution, the standard normal:
+
+```{r normal_curve, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+# Set up the features of the normal curves we'll use.
+norm_x_min = qnorm(0.005)
+norm_x_max = qnorm(0.995)
+norm_y_min = dnorm(norm_x_min)
+
+# we'll make a nice avocado colored curve here:
+norm_range = seq(from = norm_x_min, to = norm_x_max, by = 0.01)
+norm_tibb = tibble(x = norm_range,
+                   y = dnorm(norm_range))
+
+ggplot(data = norm_tibb) +
+  geom_polygon(mapping = aes(x = x, y = y), size = linewidth, color = '#364f28', fill = NA) +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() 
+
+```
+
+Values near the center are much more likely to occur than values farther out in either direction because the distribution is more dense (taller). Now let's take a look at the 5,668 avocado prices in the sample data set. Here is the scourge of millennial finances across the nation:
+
+```{r cado_hist, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+bin_size = 0.1
+
+ggplot(ava) +
+  geom_histogram(aes(x = AveragePrice), fill = '#f1e7a0', binwidth = bin_size) +
+  theme_classic() +
+  labs(x = "Price ($)", y = 'Count') +
+  scale_x_continuous(breaks = seq(from = 0.5, to = 3, by = 0.5))
+
+```
+
+The histogram shows us that most avocados cost between $1.00 and $2.50. The sample has a single peak and is pretty symmetrical so we could easily believe that this data comes from a normal distribution. If we put a normal curve on the graph, it fits loosely like the skin of a ripe avocado.
+
+```{r ava_curve, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+ava_mean = mean(ava$AveragePrice)
+ava_sd = sd(ava$AveragePrice)
+ava_min = min(ava$AveragePrice)
+ava_max = max(ava$AveragePrice)
+# Want it to be symmetric so:
+ava_end = min(c(abs(ava_min - ava_mean), abs(ava_max - ava_mean)))
+
+ava_prices = seq(from = ava_mean - ava_end, to = ava_mean + ava_end, by = 0.01)
+ava_curve = tibble(x = ava_prices,
+                   y = nrow(ava)*bin_size*dnorm(ava_prices, ava_mean, ava_sd))
+
+ggplot() +
+  geom_histogram(data = ava, aes(x = AveragePrice), fill = '#f1e7a0', binwidth = bin_size) +
+  geom_polygon(data = ava_curve, 
+               mapping = aes(x = x, y = y), 
+               size = linewidth, color = '#364f28', fill = NA) +
+  theme_classic() +
+  labs(x = "Price ($)", y = 'Count') +
+  scale_x_continuous(breaks = seq(from = 0.5, to = 3, by = 0.5))
+
+```
+
+While the curve fits this data set well, this is often not the case. Many statistical techniques require the data to look roughly like one distribution or another. Staring at the histogram is one way to assess this. Another is to consider the quantiles.
+
+### Quantiles
+
+Quantiles are locations on distributions that are larger than a specific amount of the data. These are commonly reported for standardized tests and child development tables. For example, a 36 month old girl weighing 28 lbs. (13 kg) is at the 25$^{th}$ weight quantile. This means that she is heavier than 25% of the girls her age and lighter than 75%.
+
+Visually, the N$^{th}$ quantile can be represented as locations on a distribution for which N% of the area under the curve is to its left. Here is the standard normal distribution with the 40th quantile marked. The 40th quantile is -0.253. You'll notice that this is a little bit to the left of the center because the 50th quantile (median) is the exact center. The tan area is 40% of the total area.
+
+```{r normal_curve40, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+# Create the polygon for the 40th percentile
+quant40 = qnorm(p = 0.4)
+quant40_s = seq(from = norm_x_min, to = quant40, by = 0.01)
+quant40_ex = tibble(x = c(quant40_s, quant40),
+                    y = c(dnorm(quant40_s), norm_y_min))
+
+ggplot() +
+  geom_polygon(data = quant40_ex, 
+               mapping = aes(x = x, y = y), 
+               size = linewidth, fill = '#f1e7a0') +
+  geom_polygon(data = norm_tibb, 
+               mapping = aes(x = x, y = y), 
+               size = linewidth, color = '#364f28', fill = NA) +
+  geom_point(data = tibble(x = quant40,
+                           y = norm_y_min),
+             aes(x = x, y = y), 
+             size = bead_size, color = 'olivedrab3') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max), breaks = c(-2, 0, 2))
+
+```
+
+If we mark many quantiles on the distribution, we can see that there is a pattern of sorts in their spacing. Below are the 5th, 10th, 15th... quantiles. Each represents an increase of 5% of the total area.
+
+```{r normal_curve_quantiles, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+# Create the polygon for the 40th percentile
+normal_quants = qnorm(p = (1:n_quant)/(n_quant+1))
+normal_quants = tibble(x = normal_quants,
+                 ymax = dnorm(normal_quants),
+                 ymin = min(norm_tibb$y))
+ggplot() +
+  geom_polygon(data = norm_tibb, 
+               mapping = aes(x = x, y = y), 
+               size = linewidth, color = '#364f28', fill = NA) +
+  geom_segment(data = normal_quants,
+             aes(x = x, xend = x, y = ymin, yend = ymax),
+             color = 'olivedrab3', size = stick_size) +
+  geom_point(data = normal_quants,
+             aes(x = x, y = ymin), 
+             size = bead_size, color = 'olivedrab3') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max), breaks = c(-2, 0, 2))
+
+```
+
+Because each slice of the distribution is 5% of the total area and the height of the graph is changing, the slices have different widths. It's like we're trying to cut a strange shaped cake into 20 equal pieces using parallel cuts. The slices at the center must be thinner since the distribution is denser (taller) than on the edges. If we just look at the points by themselves, we get a pretty pattern:
+
+```{r normal_sig_quantiles, echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = norm_x_min, xend = norm_x_max,
+               y = normal_quants$ymin[1], yend = normal_quants$ymin[1])) +
+  geom_point(data = normal_quants,
+             aes(x = x, y = ymin), 
+             size = bead_size, color = 'olivedrab3') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_text(colour = "grey100"),
+        axis.title = element_text(colour = "grey100"),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max), breaks = c(-2, 0, 2))
+
+```
+
+This method of viewing the quantiles of a distribution is what made QQ plots clearer to me. The sequence of differently spaced dots allows us to see a two dimensional curve as a one dimensional string of points. The spaces between the points describe the relative height of the curve. Smaller spaces indicate that the curve is taller while larger gaps indicate a less dense portion of the distribution.
+  
+I like to think of this pattern of points as the **distribution's signature**. It's a way of characterizing the distribution in a code of sorts. You might imagine that if we drew the signature with 100 points, instead of 19, that a computer could roughly recreate the distribution
+by comparing the relative sizes of the gaps between points.
+
+Let's compare the normal distribution's signature to a related distribution: a chi-squared distribution $(\chi^{2}(2))$. Don't worry too much about the name or fancy symbol. It's just another type of distribution. This is what it looks like with successive 5% quantiles:
+
+```{r chi2_curve, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+# Set up chi2 range:
+chi2_x_min = qchisq(0.005, df = 2)
+chi2_x_max = qchisq(0.995, df = 2)
+chi2_y_min = dchisq(chi2_x_max, df = 2)
+
+# we'll make our chi squared curve
+chi2_range = seq(from = chi2_x_min, to = chi2_x_max, by = 0.001)
+chi2_tibb = tibble(y = c(dchisq(chi2_range, df = 2), chi2_y_min),
+                 x = c(chi2_range, chi2_x_min))
+chi2_tibb = tibble(y = min(chi2_tibb$y),
+                 x = chi2_y_min) %>% 
+  bind_rows(chi2_tibb)
+
+# And normal quantiles:
+chi2_quants = qchisq(p = (1:n_quant)/(n_quant + 1), df = 2)
+chi2_quants = tibble(x = chi2_quants,
+                 ymin = min(chi2_tibb$y),
+                 ymax = dchisq(chi2_quants, df = 2))
+
+ggplot(data = chi2_tibb) +
+  geom_polygon(mapping = aes(x = x, y = y), size = linewidth, color = 'firebrick', fill = NA)  +
+  geom_segment(data = chi2_quants,
+             aes(x = x, xend = x, y = ymin, yend = ymax),
+             color = 'darkorange', size = stick_size) +
+  geom_point(data = chi2_quants,
+             aes(x = x, y = ymin), 
+             size = bead_size, color = 'darkorange')+
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(chi2_x_min, chi2_x_max))
+
+```
+
+Here is chi-squared's signature:
+
+```{r chi2_sig_deciles, echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = chi2_x_min, xend = chi2_x_max,
+               y = chi2_quants$ymin[1], yend = chi2_quants$ymin[1])) +
+  geom_point(data = chi2_quants,
+             aes(x = x, y = ymin), 
+             size = bead_size, color = 'darkorange') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_text(colour = "grey100"),
+        axis.title = element_text(colour = "grey100"),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(chi2_x_min, chi2_x_max))
+
+```
+
+Notice how the symmetry (or lack thereof) of each distribution affects their signatures. The normal distribution's quantiles are mirrored on the left and right of the 50th percentile (median). The chi-squared is very dense on the left hand side and then the spacing between the points grows as you move to the right.
+
+Take a look at the distributions below. Try and envision what their signatures will look like and then click the tabs below to see them.
+
+```{r four_dists, echo = FALSE, fig.align='center', fig.width=8, fig.height=6.5}
+
+
+# Chi2(4)
+chi4_x_min = qchisq(0.005, df = 5)
+chi4_x_max = qchisq(0.995, df = 5)
+chi4_y_min = dchisq(chi4_x_max, df = 5)
+
+chi4_range = seq(from = chi4_x_min, to = chi4_x_max, by = 0.001)
+chi4_tibb = tibble(y = c(dchisq(chi4_range, df = 5), chi4_y_min),
+                 x = c(chi4_range, chi4_x_min))
+g1 = ggplot() +
+  geom_polygon(data = chi4_tibb,
+               mapping = aes(x = x, y = y),
+               size = linewidth, color = 'mediumorchid4', fill = NA) +
+  labs(x = ' ', y = 'Density', title = 'A') +
+  theme_classic() +
+  scale_x_continuous(limits = c(chi4_x_min, chi4_x_max)) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+
+
+# Uniform, yes we could do this more easily but I like copy-paste
+uni_x_min = qunif(0.005)
+uni_x_max = qunif(0.995)
+uni_y_min = dunif(uni_x_max)
+
+uni_range = seq(from = uni_x_min, to = uni_x_max, by = 0.001)
+uni_tibb = tibble(y = c(0, dunif(uni_range), 0),
+                 x = c(uni_x_min, uni_range, uni_x_max))
+
+g2 = ggplot() +
+  geom_polygon(data = uni_tibb,
+               mapping = aes(x = x, y = y),
+               size = linewidth, color = 'darkgoldenrod1', fill = NA) +
+  labs(x = ' ', y = ' ', title = 'B') +
+  theme_classic() +
+  scale_y_continuous(limits = c(0, 1.5)) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+# And this funky beta distribution:
+s1 = 0.65
+s2 = 0.65
+beta_x_min = qbeta(0.005, shape1 = s1, shape2 = s2)
+beta_x_max = qbeta(0.995, shape1 = s1, shape2 = s2)
+beta_y_min = dbeta(beta_x_max, shape1 = s1, shape2 = s2)
+
+beta_range = seq(from = beta_x_min, to = beta_x_max, by = 0.001)
+beta_tibb = tibble(y = c(0, dbeta(beta_range, shape1 = s1, shape2 = s2), 0),
+                 x = c(beta_x_min, beta_range, beta_x_max))
+
+g3 = ggplot() +
+  geom_polygon(data = beta_tibb,
+               mapping = aes(x = x, y = y),
+               size = linewidth, color = 'hotpink2', fill = NA) +
+  labs(x = 'Value', y = 'Density', title = 'D') +
+  theme_classic() +
+  scale_x_continuous(limits = c(beta_x_min, beta_x_max)) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+# Let's simulate a bimodal one:
+set.seed(0)
+means = c(rep(0, times = 10000), rep(4, times = 20000))
+outputs = vapply(X = means, FUN = rnorm, FUN.VALUE = double(1), n = 1, sd = .8)
+
+g4 = tibble(output = outputs) %>% 
+  ggplot() +
+  geom_density(aes(x = output),
+               size = linewidth,
+               color = 'cyan3', fill = NA) +
+  labs(x = 'Value', y = ' ', title = 'C') +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+
+
+grid.arrange(g1, g2, g3, g4, ncol =2)
+
+```
+
+#### Solutions {.tabset}
+
+#####  <span>&#8203;</span>
+
+##### A
+
+
+```{r, echo = FALSE, fig.align='center', fig.width=6.2, fig.height=1.5}
+
+chi4_quants = qchisq(p = (1:n_quant)/(n_quant + 1), df = 4)
+chi4_quants = tibble(x = chi4_quants,
+                     y = 0)
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = chi4_x_min, xend = chi4_x_max,
+               y = 0, yend = 0)) +
+  geom_point(data = chi4_quants,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'mediumorchid4') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(chi4_x_min, chi4_x_max)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+The purple graph $(\chi^{2}(4))$ is a cousin of the chi-squared distribution we looked at before. Like the normal distribution, it has a single peak but it's not symmetrical. Notice how the signature trails off on the right side as the distribution becomes less dense.
+
+##### B
+
+```{r, echo = FALSE, fig.align='center', fig.width=6.2, fig.height=1.5}
+
+unif_quants = qunif(p = (1:n_quant)/(n_quant + 1))
+unif_quants = tibble(x = unif_quants,
+                     y = 0)
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = 0, xend = 1,
+               y = 0, yend = 0)) +
+  geom_point(data = unif_quants,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'darkgoldenrod1') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(0, 1)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+This is the uniform distribution; each value has the same probability.
+Cutting this distribution into 20 slices requires 19 identically spaced cuts.
+
+##### C
+
+```{r, echo = FALSE, fig.align='center', fig.width=6.2, fig.height=1.5}
+
+beta_quants = qbeta(p = (1:n_quant)/(n_quant + 1), shape1 = s1, shape2 = s2)
+beta_quants = tibble(x = beta_quants,
+                     y = 0)
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = 0, xend = 1,
+               y = 0, yend = 0)) +
+  geom_point(data = beta_quants,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'hotpink2') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(0, 1)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+```
+
+Here we have a version of the beta distribution. Its signature looks a lot like the uniform distribution but the little horns on the sides warp the signature away from the center.
+
+##### D
+
+```{r, echo = FALSE, fig.align='center', fig.width=6.2, fig.height=1.5}
+
+bimod_quants = quantile(x = outputs, probs = (1:n_quant)/(n_quant + 1))
+bimod_quants = tibble(x = bimod_quants,
+                     y = 0)
+bimod_min = quantile(x = outputs, probs = 0.005)
+bimod_max = quantile(x = outputs, probs = 0.995)
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = bimod_min, 
+                   xend = bimod_max,
+                   y = 0, yend = 0)) +
+  geom_point(data = bimod_quants,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'cyan3') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(bimod_min, bimod_max)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+This is a distribution I simulated. I took two normal distributions with different means and sampled them at a 1:2 ratio. The signature displays the two different peaks as clusters of points and the valley as a large gap in the middle.
+
+### QQ Plots
+
+Let's return to the original question: how can we get a feel for how similar or different two distributions are?
+
+**Quantile-quantile** (QQ) plots are one way of accomplishing this. They are formed by lining up the ordered quantiles of two distributions or samples as the vertical and horizontal axes of a graph. We are essentially comparing the signatures of two distributions by looking at the spacing between the quantiles. Let's start with a bit of a silly example where we plot a standard normal distribution against itself. Its signature looks like this:
+
+```{r normal_sig_quantiles2, echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = norm_x_min, xend = norm_x_max,
+               y = 0, yend = 0)) +
+  geom_point(data = normal_quants,
+             aes(x = x, y = 0), 
+             size = bead_size, color = 'olivedrab3') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max), breaks = c(-2, 0, 2))
+
+```
+
+Here is the normal distribution's signature plotted against itself:
+
+```{r normal_normal_QQ, echo = FALSE, fig.align='center', fig.width=8, fig.height=6.5}
+
+# make a data frmae to hold the points along the axes. We want to have the minimum
+# of both axes as the 0.005 tile that we used to bound the signature:
+zeroes = rep(norm_x_min, times = nrow(normal_quants))
+norm_norm = tibble(x = c(normal_quants$x, zeroes),
+                   y = c(zeroes, normal_quants$x))
+
+# this will hold the segments to connect them.
+# we need to line the quanitles up first:
+norm_norm_seg = norm_norm %>% 
+  mutate(val = c(norm_norm$x[1:n_quant], norm_norm$y[(n_quant+1):(2*n_quant)])) %>% 
+  select(val)
+norm_norm_seg2 = norm_norm_seg %>% 
+  slice(1:n_quant) %>% 
+  rename(x2 = val)
+norm_norm_seg = norm_norm_seg %>% 
+  slice((n_quant+1):(2*n_quant)) %>% 
+  rename(y2 = val) %>% 
+  bind_cols(norm_norm_seg2)
+
+
+# now join with the points:
+norm_norm = norm_norm_seg %>% 
+  bind_rows(norm_norm_seg) %>% 
+  bind_cols(norm_norm)
+
+ggplot() +
+  geom_segment(data = NULL, aes(x = norm_x_min, xend = norm_x_max, 
+                                y =norm_x_min, yend = norm_x_min)) +
+  geom_segment(data = NULL, aes(x = norm_x_min, xend = norm_x_min, 
+                                y =norm_x_min, yend = norm_x_max)) +
+  geom_segment(data = norm_norm,
+               aes(x = x, y = y, xend = x2, yend = y2),
+               size = stick_size,
+               color = 'olivedrab3') + 
+  geom_point(data = norm_norm,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'olivedrab3') + 
+  geom_segment(data = NULL,
+             aes(x = min(norm_norm$x2), xend = max(norm_norm$x2),
+                 y = min(norm_norm$y2), yend = max(norm_norm$y2)), 
+             size = stick_size*.9,
+             color = 'black',
+             linetype = 'dotted') +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max)) +
+  scale_y_continuous(limits = c(norm_x_min, norm_x_max)) + 
+  coord_fixed() +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+This diagram shows us that the spacing between the quantiles is the same between the signatures. As we move from left to right on the horizontal axis, the size of the gap between the points changes. The corresponding quantiles on the vertical axis change by the same amount so all of the rectangles have the same ratio of length to width. This allows us to draw a straight line through the upper right corners of the rectangles.
+
+Now let's compare the signatures of the normal distribution and the chi-square(4) distribution that we just looked at. Each has a single peak but the chi-squared is not as symmetric:
+
+```{r norm_sig2, echo = FALSE, fig.align='center', fig.width=6.2, fig.height=1.5}
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = norm_x_min, xend = norm_x_max,
+               y = 0, yend = 0)) +
+  geom_point(data = normal_quants,
+             aes(x = x, y = 0), 
+             size = bead_size, color = 'olivedrab3') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max), breaks = c(-2, 0, 2))
+
+```
+
+```{r chi4_sig, echo = FALSE, fig.align='center', fig.width=6.2, fig.height=1.5}
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = chi4_x_min, xend = chi4_x_max,
+               y = 0, yend = 0)) +
+  geom_point(data = chi4_quants,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'mediumorchid4') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(chi4_x_min, chi4_x_max)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+Here is the plot of matching the quantiles of the chi-squared(4) and normal distributions. I've again plotted these quantiles over 98% of each distribution's range. The chi-squared distribution is skewed so its quantiles are packed into a smaller portion of its axis.
+
+```{r unif_beta_qq, echo = FALSE, fig.align='center', fig.width=8, fig.height=6.5}
+
+# make a data frmae to hold the points along the axes. We'll want to just 
+# slide the data so that it's all positive:
+zeroes1 = rep(norm_x_min, times = nrow(normal_quants))
+zeroes2 = rep(chi4_x_min, times = nrow(normal_quants))
+norm_chi4 = tibble(x = c(normal_quants$x, zeroes1),
+                   y = c(zeroes2, chi4_quants$x),
+                   colo = c(rep('g', times = length(zeroes1)), rep('p', times = length(zeroes1))))
+
+# this will hold the segments to connect them.
+# we need to line the quanitles up first:
+norm_chi4_seg = norm_chi4 %>% 
+  mutate(val = c(norm_chi4$x[1:n_quant], norm_chi4$y[(n_quant+1):(2*n_quant)])) %>% 
+  select(val)
+norm_chi4_seg2 = norm_chi4_seg %>% 
+  slice(1:n_quant) %>% 
+  rename(x2 = val)
+norm_chi4_seg = norm_chi4_seg %>% 
+  slice((n_quant+1):(2*n_quant)) %>% 
+  rename(y2 = val) %>% 
+  bind_cols(norm_chi4_seg2)
+
+
+# now join with the points:
+norm_chi4 = norm_chi4_seg %>% 
+  bind_rows(norm_chi4_seg) %>% 
+  bind_cols(norm_chi4)
+# that's a lot nicer than the way I did it before since everything is in one df
+
+# The scale for the plot is a bit odd here... If I use the middle 99%
+# of each d
+
+# highlight some segments for comparison
+highlight_table = tibble(x1 = c(norm_x_min, norm_x_min, normal_quants$x[1], normal_quants$x[n_quant-1]),
+                         x2 = c(norm_x_min, norm_x_min, normal_quants$x[2], normal_quants$x[n_quant]),
+                         y1 = c(chi4_quants$x[1], chi4_quants$x[n_quant-1], chi4_x_min, chi4_x_min),
+                         y2 = c(chi4_quants$x[2], chi4_quants$x[n_quant], chi4_x_min, chi4_x_min),
+                         col = c('y', 'pi', 'y', 'pi'))
+
+ggplot() +
+  geom_segment(data = NULL, aes(x = norm_x_min, xend = norm_x_max, 
+                                y = chi4_x_min, yend = chi4_x_min)) +
+  geom_segment(data = NULL, aes(x = norm_x_min, xend = norm_x_min, 
+                                y = chi4_x_min, yend = chi4_x_max)) +
+  
+  geom_segment(data = norm_chi4,
+               aes(x = x, y = y, xend = x2, yend = y2, color = colo),
+               size = stick_size) + 
+  geom_point(data = norm_chi4,
+             aes(x = x, y = y, color = colo), 
+             size = bead_size) + 
+  geom_segment(data = NULL,
+             aes(x = min(norm_chi4$x2), xend = max(norm_chi4$x2),
+                 y = min(norm_chi4$y2), yend = max(norm_chi4$y2)), 
+             size = stick_size*.9,
+             color = 'black',
+             linetype = 'dotted') +
+  geom_segment(data = highlight_table, aes(x = x1, xend = x2,
+                                           y = y1, yend = y2,
+                                           color = col), 
+             size = stick_size) +
+  scale_color_manual(values = c('g' = 'olivedrab3', 'p' = 'mediumorchid4', 'y' = 'darkgoldenrod1', 'pi' = 'indianred3'), guide=FALSE) +
+  labs(x = 'Normal', y = 'Chi-Squared (4)') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank(),
+        aspect.ratio = 1)
+
+```
+
+What is this graph telling us? It shows that the exchange rate between the quantiles of the two distributions is not constant.
+
+I've highlighted a comparison here with yellow and red. Because the normal distribution is symmetric, the red and yellow segments along the horizontal axis are the same length. By comparison, the corresponding segments on the chi-square's axis are wildly different. This fluctuating exchange rate is what is causing the curved shape in the intersections of the two distributions quantiles. On the left hand side of the graph, the gaps between quantiles are larger for the normal distribution. By the time we reach the right hand side, the gaps are larger for the chi-squared.
+
+This is the essence of a QQ plot. We're curious if the signatures of the two distributions are similar. Do they have a similar sequence of spaces between their quantiles? If we're thinking about signatures as encoded versions of distributions, similar signatures should indicate similar distributions.
+
+Note that with these plots we're not really interested in the scales of the graphs; if we multiplied all the quantiles of a distribution by 100, its signature will look the same. What's important to determining if two distributions are similar is that the exchange rate between the quantiles is constant. Is a large gap in one distribution mirrored with a large gap in the other?
+
+### Return to Avocados
+
+Now that we've taken a tour of the composition of a QQ plot, let's return to our original question. We had this histogram of avocado prices and were curious how well it matched up with the theoretical normal distribution with the same mean and standard deviation:
+
+```{r ava_curve2, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+ggplot() +
+  geom_histogram(data = ava, aes(x = AveragePrice), fill = '#f1e7a0', binwidth = bin_size) +
+  geom_polygon(data = ava_curve, 
+               mapping = aes(x = x, y = y), 
+               size = linewidth, color = '#364f28', fill = NA) +
+  theme_classic() +
+  labs(x = "Price ($)", y = 'Count') +
+  scale_x_continuous(breaks = seq(from = 0.5, to = 3, by = 0.5))
+
+```
+
+I've computed a few sample quantiles (every 10%) from the avocado data and lined them up with the corresponding quantiles of a normal distribution with the same mean and standard deviation as our sample. I've also calculated slopes to the next quantile so we can see how constant it feels:
+
+```{r ntile_table, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+# compute sample and theoretical deciles, put them in a table
+sample_ntiles = ava$AveragePrice %>% 
+  quantile(probs = (1:9)/10) %>% 
+  round(digits = 2)
+theoretical_ntiles = qnorm(p = (1:9)/10, mean = mean(ava$AveragePrice), sd = sd(ava$AveragePrice)) %>% 
+  round(digits = 2)
+
+ntile_tibb = tibble(quantile = paste0((1:9)*10, '%'),
+                    sample_ntile = sample_ntiles,
+                    theoretical_ntile = theoretical_ntiles) %>% 
+  mutate(slope_next = (lead(theoretical_ntiles) - theoretical_ntiles)/(lead(sample_ntiles)-sample_ntiles),
+         slope_next = round(slope_next, digits = 2))
+
+# make a nice formatted version for the ladies n gents
+ntile_tibb_f = ntile_tibb %>% 
+  mutate_if(.predicate = is.numeric, .funs = format, nsmall = 2)
+ntile_tibb_f$slope_next[9] = ''
+colnames(ntile_tibb_f) = c('Quantile', 'Sample (\\$)', 'Theoretical (\\$)', 'Slope to Next Point')
+kable(ntile_tibb_f, align = 'c', format = 'html', escape = TRUE) %>% 
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+```
+
+You can see that for each quantile, the prices are very similar and the slope doesn't vary a whole lot. The QQ plot will be formed by lining up the signatures of the sample (tan) and theoretical normal (green). Here are the signatures using 5% quantiles:
+
+```{r ntile_table2, echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+sample_ntiles2 = ava$AveragePrice %>% 
+  quantile(probs = (1:19)/20) %>% 
+  round(digits = 2) 
+sample_ends = quantile(ava$AveragePrice, probs = c(0.01, .99))
+ntile_tibb2 = tibble(x = sample_ntiles2,
+                     y = 0,
+                     theoretical_ntile = qnorm((1:19)/20, 
+                                               mean = mean(ava$AveragePrice), 
+                                               sd = sd(ava$AveragePrice)))
+
+ggplot()+
+  geom_segment(data = NULL, 
+               aes(x = sample_ends[1], xend = sample_ends[2],
+               y = 0, yend = 0)) +
+  geom_point(data = ntile_tibb2,
+             aes(x = x, y = y), 
+             size = bead_size, color = '#f1e7a0') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(sample_ends[1], sample_ends[2]))
+
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = norm_x_min, xend = norm_x_max,
+               y = 0, yend = 0)) +
+  geom_point(data = normal_quants,
+             aes(x = x, y = 0), 
+             size = bead_size, color = 'olivedrab3') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max))
+
+```
+
+Here is the QQ plot with the sample's signature as the x coordinates and the normal's signature as y:
+
+```{r crude_qq, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+ggplot(data = ntile_tibb2) +
+  geom_point(aes(x = x,
+                 y = theoretical_ntile),
+             color = '#f1e7a0',
+             size = bead_size*2) +
+  geom_abline(size = stick_size*.9, linetype = 'dotted') +
+  theme_classic() +
+  labs(x = 'Sample Quantiles ($)', y = 'Theoretical Quantiles ($)') +
+  scale_x_continuous(limits = c(min(ntile_tibb2$theoretical_ntile), 2.5), 
+                     breaks = seq(from = 1, to = 2.5, by = 0.5)) +
+  scale_y_continuous(limits = c(min(ntile_tibb2$theoretical_ntile), 2.5),
+                     breaks = seq(from = 1, to = 2.5, by = 0.5))
+
+```
+
+The nineteen quantiles plotted above hug the reference line quite well and this gives further evidence that the sample of avocado prices we have resembles a normal distribution. Notice how on the signatures, the sample's first and last quantiles are a bit smaller than the corresponding points on theoretical normal. This is borne out on the QQ plot in that the first and last points are slightly below the reference line.
+
+There are a number of different flavors of these plots. Many software applications compute a quantile for each data point you have. For example, a data set with 50 observation will be plotted against 2% quantiles because 50*2 = 100. Here's our entire data set plotted against their corresponding theoretical quantiles:
+
+```{r sophisticated_qq, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+theoretical_ntiles = qnorm(p = 1:nrow(ava)/(nrow(ava)+1), mean = mean(ava$AveragePrice), sd = sd(ava$AveragePrice))
+
+ntile_tibb3 = tibble(sample_ntile = sort(ava$AveragePrice),
+                    theoretical_ntile = theoretical_ntiles)
+ggplot(data = ntile_tibb3) +
+  geom_point(aes(x = sample_ntile,
+                 y = theoretical_ntile),
+             color = '#f1e7a0',
+             size = bead_size) +
+  geom_abline(size = stick_size*.9, linetype = 'dotted') +
+  theme_classic() +
+  labs(x = 'Sample Prices ($)', y = 'theoretical Prices ($)') +
+  scale_x_continuous(breaks = seq(from = 0.5, to = 3, by = 0.5)) +
+  scale_y_continuous(breaks = seq(from = 0.5, to = 3, by = 0.5))
+
+```
+
+This is an exceptionally well behaved sample. In fact, the histogram is clear enough that many analysts would not even bother to make the QQ plot for this sample. This is infrequently the case, however.
+
+Let's conclude by looking at one more version. Here I've changed the theoretical quantiles to come from a chi-squared distribution instead of a normal. We previously observed that the chi-squared(4) distribution has a single peak like our data. How well will the data fit that distribution?
+
+This time I've used a little trick (standardization) to rescale the data.
+
+```{r unsophisticated_qq, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+theoretical_ntiles = qchisq(p = (1:nrow(ava))/(nrow(ava)+1), df = 4)
+theoretical_ntiles = (theoretical_ntiles - 4)/sqrt(8)
+observed_std = (ava$AveragePrice - mean(ava$AveragePrice))/sd(ava$AveragePrice)
+observed_std = sort(observed_std)
+ntile_tibb4 = tibble(sample_ntile = observed_std,
+                    theoretical_ntile = theoretical_ntiles)
+ggplot(data = ntile_tibb4) +
+  geom_point(aes(x = sample_ntile,
+                 y = theoretical_ntile),
+             color = '#f1e7a0',
+             size = bead_size) +
+  geom_abline(size = stick_size*.9, linetype = 'dotted') +
+  theme_classic() +
+  labs(x = 'Standardized Observation', y = 'Standardized theoretical Qauntile')
+
+```
+
+The data fits this theoretical distribution much poorer than it did the normal
+distribution. The points do not form a straight line. The curve it forms
+is (unsurprisingly) similar to the
+QQ plot we created comparing the chi-squared (4) to the normal.
+
+If we plot the histogram, we can see how the shape is much poorer:
+
+
+```{r avo_chi4, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+bin_size = 0.1
+
+# Make a sequence on the raw curve:
+chi4_curve_x = seq(from = chi4_x_min, to = chi4_x_max, by = 0.001)
+chi4_curve_y = dchisq(chi4_curve_x, df = 4)
+# standardize them:
+chi4_curve_x = (chi4_curve_x - mean(chi4_curve_x))/sd(chi4_curve_x)
+chi4_curve_x = chi4_curve_x*sd(ava$AveragePrice) + mean(ava$AveragePrice)
+
+ava_curve2 = tibble(x = c(min(chi4_curve_x),chi4_curve_x),
+                   y = c(min(chi4_curve_y),chi4_curve_y*nrow(ava)))
+
+ggplot() +
+  geom_histogram(data = NULL, aes(x = ava$AveragePrice), fill = '#f1e7a0', binwidth = bin_size) +
+  geom_polygon(data = ava_curve2, 
+               mapping = aes(x = x, y = y), 
+               size = linewidth, color = '#364f28', fill = NA) +
+  theme_classic() +
+  labs(x = "Price ($)", y = 'Count') 
+
+```
+
+The fact that
+the chi-squared distribution would have its quantiles more densely packed on the lower end
+of its distribution is reflected in the QQ plots slow increase on the left hand side
+of the graph.
+
+
+### Data Audiation
+
+It's common wisdom that being able to visualize data is essential to understanding it but why should our eyes be the only sense we use?
+
+During my process of thinking about distribution signatures I came up with a way that you can *hear* a distribution. This is meant to be a bit tongue in cheek but you're still reading this 
+so you probably like this stuff. Each signature's sound begins with a bell and is played out with harsh beeps. Behold the sounds of distributions!
+
+```{r define_audio, echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+# okay so I want to get a feel for how we can create a function that takes in
+# a set of quantiles and returns a sound
+library('audio')
+
+x = sin(1:8000/10)
+sound = audioSample(x, rate=44100, bits=16, clip = TRUE)
+bell = load.wave("C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/bell.wav")
+bell = bell[1,]
+# so I want to basically just line up some strings of NAs equal to the gaps in the 
+# signature. Here's the functions for a set of quantiles:
+
+# This will make a gap followed by a sound
+make_beep = function(n){
+  c(rep(NA, times = n), sound)
+}
+# play with this parameter for scaling:
+sound_param = 30
+
+# Take in the endpoints of the distributions middle 99% and the quantiles
+make_beeps = function(min_dist, max_dist, quants){
+  
+  # length of the sound
+  sig_sound_len = max_dist - min_dist
+  # compute the distances between the quantiles
+  sig_gaps = tibble(quant = quants) %>% 
+    mutate(gap = abs(lead(quant) - quant)/sig_sound_len,
+           gap = floor(gap*sound_param*length(sound))) %>% 
+    filter(!is.na(gap)) %>% 
+    .[['gap']] %>% 
+    lapply(make_beep) %>% 
+    reduce(c)
+  # now we need to add on the end.
+  c(bell,
+    rep(NA, times = floor((min(quants) - min_dist)/sig_sound_len*sound_param*length(sound))),
+    sig_gaps,
+    rep(NA, times = floor((max_dist - max(quants))/sig_sound_len*sound_param*length(sound))),
+    bell)
+  
+}
+test = make_beeps(norm_x_min, norm_x_max, normal_quants$x)
+
+# Record the beautiful music:
+make_beeps(norm_x_min, norm_x_max, normal_quants$x) %>% 
+  save.wave('C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/normal.wav')
+make_beeps(chi2_x_min, chi2_x_max, chi2_quants$x) %>% 
+  save.wave('C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/chi2.wav')
+make_beeps(bimod_min, bimod_max, bimod_quants$x) %>% 
+  save.wave('C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/bimod.wav')
+make_beeps(beta_x_min, beta_x_max, beta_quants$x) %>% 
+  save.wave('C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/beta.wav')
+make_beeps(sample_ends[1], sample_ends[2], sample_ntiles2) %>% 
+  save.wave('C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/avo.wav')
+```
+
+#### Sounds {.tabset}
+
+##### Normal
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+ggplot(data = norm_tibb) +
+  geom_polygon(mapping = aes(x = x, y = y), size = linewidth, color = 'olivedrab3', fill = NA) +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic()  +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max), breaks = c(-2, 0, 2))
+
+```
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = norm_x_min, xend = norm_x_max,
+               y = 0, yend = 0)) +
+  geom_point(data = normal_quants,
+             aes(x = x, y = 0), 
+             size = bead_size, color = 'olivedrab3') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(norm_x_min, norm_x_max), breaks = c(-2, 0, 2))
+
+```
+
+<html>
+<center>
+<audio controls>
+  <source src="C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/normal.wav" type="audio/wav">
+</audio>
+</center>
+</html>
+
+##### $\chi^2(2)$
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+ggplot(data = chi2_tibb) +
+  geom_polygon(mapping = aes(x = x, y = y), size = linewidth, color = 'darkorange', fill = NA)  +
+  theme_classic() +
+  scale_x_continuous(limits = c(chi2_x_min, chi2_x_max)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = chi2_x_min, xend = chi2_x_max,
+               y = chi2_quants$ymin[1], yend = chi2_quants$ymin[1])) +
+  geom_point(data = chi2_quants,
+             aes(x = x, y = ymin), 
+             size = bead_size, color = 'darkorange') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(chi2_x_min, chi2_x_max))
+
+```
+
+<html>
+<center>
+<audio controls>
+  <source src="C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/chi2.wav" type="audio/wav">
+</audio>
+</center>
+</html>
+
+##### Bi-modal
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+tibble(output = outputs) %>% 
+  ggplot() +
+  geom_density(aes(x = output),
+               size = linewidth,
+               color = 'cyan3', fill = NA) +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = bimod_min, 
+                   xend = bimod_max,
+                   y = 0, yend = 0)) +
+  geom_point(data = bimod_quants,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'cyan3') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(bimod_min, bimod_max)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+```
+
+<html>
+<center>
+<audio controls>
+  <source src="C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/bimod.wav" type="audio/wav">
+</audio>
+</center>
+</html>
+
+##### Beta
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+ggplot() +
+  geom_polygon(data = beta_tibb,
+               mapping = aes(x = x, y = y),
+               size = linewidth, color = 'hotpink2', fill = NA) +
+  theme_classic() +
+  scale_x_continuous(limits = c(beta_x_min, beta_x_max)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+ggplot() +
+  geom_segment(data = NULL, 
+               aes(x = 0, xend = 1,
+               y = 0, yend = 0)) +
+  geom_point(data = beta_quants,
+             aes(x = x, y = y), 
+             size = bead_size, color = 'hotpink2') +
+  #labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  scale_x_continuous(limits = c(0, 1)) +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+```
+
+<html>
+<center>
+<audio controls>
+  <source src="C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/beta.wav" type="audio/wav">
+</audio>
+</center>
+</html>
+
+##### Avocados
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=4}
+
+
+ggplot(ava) +
+  geom_histogram(aes(x = AveragePrice), fill = '#f1e7a0', binwidth = bin_size) +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank())
+
+
+```
+
+```{r , echo = FALSE, fig.align='center', fig.width=6, fig.height=1.5}
+
+ggplot()+
+  geom_segment(data = NULL, 
+               aes(x = sample_ends[1], xend = sample_ends[2],
+               y = 0, yend = 0)) +
+  geom_point(data = ntile_tibb2,
+             aes(x = x, y = 0), 
+             size = bead_size, color = '#f1e7a0') +
+  labs(x = 'Value', y = 'Density') +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line = element_blank()) +
+  scale_x_continuous(limits = c(sample_ends[1], sample_ends[2]))
+
+```
+
+<html>
+<center>
+<audio controls>
+  <source src="C:/Users/HALVORS/Documents/DistributionSignatures/wav_folder/avo.wav" type="audio/wav">
+</audio>
+</center>
+</html>
