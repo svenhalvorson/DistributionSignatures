@@ -779,7 +779,7 @@ ggplot(data = ntile_tibb2) +
 
 ```
 
-The nineteen quantiles plotted above hug the reference line quite well and this gives further evidence that the sample of avocado prices we have resembles a normal distribution. Notice how on the signatures, the sample's first and last quantiles are a bit smaller than the corresponding points on theoretical normal. This is borne out on the QQ plot in that the first and last points are slightly below the reference line.
+The nineteen quantiles plotted above hug the reference line quite well and this gives further evidence that the sample of avocado prices we have resembles a normal distribution. Notice how on the signatures, the sample's first and last quantiles are a bit larger than the corresponding points on theoretical normal. This is borne out on the QQ plot in that the first and last points are slightly below the reference line.
 
 There are a number of different flavors of these plots. Many software applications compute a quantile for each data point you have. For example, a data set with 50 observation will be plotted against 2% quantiles because 50*2 = 100. Here's our entire data set plotted against their corresponding theoretical quantiles:
 
